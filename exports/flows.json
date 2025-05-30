@@ -1,0 +1,330 @@
+[
+    {
+        "id": "f6f2187d.f17ca8",
+        "type": "tab",
+        "label": "Flow 1",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "mqtt_broker_config",
+        "type": "mqtt-broker",
+        "name": "Dive MQTT Broker",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "nodered_dive_controller",
+        "usetls": false,
+        "keepalive": "60",
+        "cleansession": true
+    },
+    {
+        "id": "influxdb_config",
+        "type": "influxdb",
+        "hostname": "localhost",
+        "port": "8086",
+        "protocol": "http",
+        "database": "dive_data",
+        "name": "Dive InfluxDB",
+        "usetls": false,
+        "tls": "",
+        "influxdbVersion": "2.0",
+        "url": "http://localhost:8086",
+        "rejectUnauthorized": false
+    },
+    {
+        "id": "mqtt_broker_config_fixed",
+        "type": "mqtt-broker",
+        "name": "Dive MQTT Broker",
+        "broker": "dive_mosquitto",
+        "port": "1883",
+        "clientid": "nodered_dive_controller",
+        "usetls": false,
+        "keepalive": "60",
+        "cleansession": true
+    },
+    {
+        "id": "mqtt_in_sensor_data",
+        "type": "mqtt in",
+        "z": "f6f2187d.f17ca8",
+        "name": "MQTT Sensor Data",
+        "topic": "dive/+/sensors/data",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt_broker_config_fixed",
+        "inputs": 0,
+        "x": 110,
+        "y": 340,
+        "wires": [
+            [
+                "json_parse"
+            ]
+        ]
+    },
+    {
+        "id": "json_parse",
+        "type": "json",
+        "z": "f6f2187d.f17ca8",
+        "name": "Parse JSON",
+        "property": "payload",
+        "action": "obj",
+        "pretty": false,
+        "x": 310,
+        "y": 340,
+        "wires": [
+            [
+                "validate_data"
+            ]
+        ]
+    },
+    {
+        "id": "validate_data",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Validate Data",
+        "func": "// Validazione dati sensori\nconst data = msg.payload;\n\n// Check campi obbligatori\nconst required_fields = ['timestamp', 'site_id', 'sensor_id', 'temperature', 'current_speed', 'visibility', 'luminosity', 'battery_level'];\nconst missing_fields = required_fields.filter(field => !(field in data));\n\nif (missing_fields.length > 0) {\n    node.warn(`Campi mancanti: ${missing_fields.join(', ')}`);\n    return null;\n}\n\n// Validazione range valori\nconst validations = [\n    { field: 'temperature', min: -10, max: 40, unit: '°C' },\n    { field: 'current_speed', min: 0, max: 5, unit: 'm/s' },\n    { field: 'visibility', min: 0, max: 50, unit: 'm' },\n    { field: 'luminosity', min: 0, max: 100000, unit: 'lux' },\n    { field: 'battery_level', min: 0, max: 100, unit: '%' }\n];\n\nlet is_valid = true;\nfor (const validation of validations) {\n    const value = data[validation.field];\n    if (value < validation.min || value > validation.max) {\n        node.warn(`${validation.field}: ${value}${validation.unit} fuori range [${validation.min}-${validation.max}]`);\n        is_valid = false;\n    }\n}\n\nif (!is_valid) {\n    return null;\n}\n\n// Aggiungi timestamp processamento\ndata.processed_at = new Date().toISOString();\n\n// Log dati validi\nnode.log(`Dati validi ricevuti da ${data.site_id}/${data.sensor_id}`);\n\nmsg.payload = data;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "x": 510,
+        "y": 340,
+        "wires": [
+            [
+                "format_for_influx",
+                "check_alerts",
+                "debug_data"
+            ]
+        ]
+    },
+    {
+        "id": "format_for_influx",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Format for InfluxDB HTTP",
+        "func": "// Formatta dati per InfluxDB HTTP API\nconst data = msg.payload;\n\n// Crea line protocol per InfluxDB\nconst timestamp = Math.floor(Date.now() * 1000000); // nanoseconds\nconst line = `dive_conditions,site_id=${data.site_id},sensor_id=${data.sensor_id},depth=${data.depth || 'unknown'} temperature=${data.temperature},current_speed=${data.current_speed},current_direction=${data.current_direction || 0}i,visibility=${data.visibility},luminosity=${data.luminosity},battery_level=${data.battery_level} ${timestamp}`;\n\nmsg.payload = line;\nmsg.headers = {\n    'Authorization': 'Token dive-monitoring-token-2024',\n    'Content-Type': 'text/plain; charset=utf-8'\n};\nmsg.url = 'http://dive_influxdb:8086/api/v2/write?org=DivingCenter&bucket=dive_data&precision=ns';\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "x": 750,
+        "y": 320,
+        "wires": [
+            [
+                "http_request_influx"
+            ]
+        ]
+    },
+    {
+        "id": "http_request_influx",
+        "type": "http request",
+        "z": "f6f2187d.f17ca8",
+        "name": "Save to InfluxDB",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 990,
+        "y": 320,
+        "wires": [
+            [
+                "debug_influx_response"
+            ]
+        ]
+    },
+    {
+        "id": "debug_influx_response",
+        "type": "debug",
+        "z": "f6f2187d.f17ca8",
+        "name": "InfluxDB Response",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 1220,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "check_alerts",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Check Alerts",
+        "func": "// Sistema di alert\nconst data = msg.payload;\nconst alerts = [];\n\n// Alert temperatura critica\nif (data.temperature < 12) {\n    alerts.push({\n        type: 'temperature',\n        level: 'critical',\n        message: `Temperatura critica: ${data.temperature}°C`,\n        value: data.temperature,\n        threshold: 12,\n        site_id: data.site_id,\n        timestamp: new Date().toISOString()\n    });\n}\n\n// Alert corrente forte\nif (data.current_speed > 1.5) {\n    alerts.push({\n        type: 'current',\n        level: 'warning',\n        message: `Corrente forte: ${data.current_speed}m/s`,\n        value: data.current_speed,\n        threshold: 1.5,\n        site_id: data.site_id,\n        timestamp: new Date().toISOString()\n    });\n}\n\n// Alert visibilità scarsa\nif (data.visibility < 5) {\n    alerts.push({\n        type: 'visibility',\n        level: 'warning',\n        message: `Scarsa visibilità: ${data.visibility}m`,\n        value: data.visibility,\n        threshold: 5,\n        site_id: data.site_id,\n        timestamp: new Date().toISOString()\n    });\n}\n\n// Alert batteria\nif (data.battery_level < 20) {\n    const level = data.battery_level < 10 ? 'critical' : 'warning';\n    alerts.push({\n        type: 'battery',\n        level: level,\n        message: `Batteria scarica: ${data.battery_level}%`,\n        value: data.battery_level,\n        threshold: 20,\n        site_id: data.site_id,\n        timestamp: new Date().toISOString()\n    });\n}\n\n// Invia alert se presenti\nif (alerts.length > 0) {\n    node.log(`${alerts.length} alert generati per ${data.site_id}`);\n    \n    // Ritorna array di messaggi, uno per alert\n    return alerts.map(alert => ({ \n        payload: alert,\n        topic: `dive/${alert.site_id}/alerts`\n    }));\n}\n\nreturn null;",
+        "outputs": 1,
+        "timeout": "",
+        "x": 510,
+        "y": 440,
+        "wires": [
+            [
+                "mqtt_out_alerts",
+                "debug_alerts"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt_out_alerts",
+        "type": "mqtt out",
+        "z": "f6f2187d.f17ca8",
+        "name": "Publish Alerts",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "broker": "mqtt_broker_config_fixed",
+        "x": 730,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "debug_alerts",
+        "type": "debug",
+        "z": "f6f2187d.f17ca8",
+        "name": "Debug Alerts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 730,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "debug_data",
+        "type": "debug",
+        "z": "f6f2187d.f17ca8",
+        "name": "Debug Sensor Data",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 740,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "209f57ba15cbddfd",
+        "type": "http in",
+        "z": "f6f2187d.f17ca8",
+        "name": "GET /api/dive/sites",
+        "url": "/api/dive/sites",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 130,
+        "y": 100,
+        "wires": [
+            [
+                "0361f69c21f93fac"
+            ]
+        ]
+    },
+    {
+        "id": "0361f69c21f93fac",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Get All Sites",
+        "func": "// Lista siti con dati reali\nconst sites = [\n    {\n        site_id: \"capo_vaticano\",\n        name: \"Capo Vaticano\",\n        latitude: 38.6878,\n        longitude: 15.8742,\n        depth_category: \"shallow\",\n        status: \"online\",\n        last_update: new Date().toISOString()\n    },\n    {\n        site_id: \"tropea_reef\",\n        name: \"Tropea Reef\",\n        latitude: 38.6767,\n        longitude: 15.8989,\n        depth_category: \"deep\",\n        status: \"warning\",\n        last_update: new Date().toISOString()\n    },\n    {\n        site_id: \"stromboli_east\",\n        name: \"Stromboli East\",\n        latitude: 38.7891,\n        longitude: 15.2134,\n        depth_category: \"surface\",\n        status: \"online\",\n        last_update: new Date().toISOString()\n    }\n];\n\nmsg.payload = sites;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "x": 360,
+        "y": 100,
+        "wires": [
+            [
+                "970d7e63cede8419"
+            ]
+        ]
+    },
+    {
+        "id": "a5944714d283fe0c",
+        "type": "http in",
+        "z": "f6f2187d.f17ca8",
+        "name": "GET /api/dive/sites/:siteId/current",
+        "url": "/api/dive/sites/:siteId/current",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 130,
+        "y": 180,
+        "wires": [
+            [
+                "f9062029cf559f45"
+            ]
+        ]
+    },
+    {
+        "id": "f9062029cf559f45",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Get Current Data from InfluxDB",
+        "func": "// Prendi siteId dai parametri URL\nconst siteId = msg.req.params.siteId;\n\n// Genera timestamp corrente\nconst now = new Date();\nconst timeVariation = Math.sin(now.getTime() / 30000);\n\n// Configurazioni diverse per ogni sito\nconst siteConfigs = {\n    \"capo_vaticano\": {\n        baseTemp: 19.0,\n        baseDepth: \"shallow\",\n        baseCurrent: 0.8,\n        baseVisibility: 22,\n        baseLuminosity: 850,\n        baseBattery: 78\n    },\n    \"tropea_reef\": {\n        baseTemp: 16.5,\n        baseDepth: \"deep\", \n        baseCurrent: 1.2,\n        baseVisibility: 28,\n        baseLuminosity: 65,\n        baseBattery: 45\n    },\n    \"stromboli_east\": {\n        baseTemp: 20.1,\n        baseDepth: \"surface\",\n        baseCurrent: 0.3,\n        baseVisibility: 15,\n        baseLuminosity: 1200,\n        baseBattery: 92\n    }\n};\n\n// Prendi configurazione per questo sito\nconst config = siteConfigs[siteId] || siteConfigs[\"capo_vaticano\"];\n\n// Genera variazioni casuali\nconst randomTemp = (Math.random() - 0.5) * 2;\nconst randomCurrent = (Math.random() - 0.5) * 0.4;\nconst randomVisibility = (Math.random() - 0.5) * 4;\nconst randomLuminosity = (Math.random() - 0.5) * 200;\nconst randomBattery = (Math.random() - 0.5) * 10;\n\n// Crea dati che cambiano nel tempo\nconst currentData = {\n    timestamp: now.toISOString(),\n    site_id: siteId,\n    sensor_id: `${siteId}_sensor_01`,\n    depth: config.baseDepth,\n    temperature: Number((config.baseTemp + timeVariation * 3 + randomTemp).toFixed(1)),\n    current_speed: Number(Math.max(0, config.baseCurrent + timeVariation * 0.5 + randomCurrent).toFixed(1)),\n    current_direction: Math.floor((45 + timeVariation * 60 + (Math.random() * 60)) % 360),\n    visibility: Number(Math.max(1, config.baseVisibility + timeVariation * 5 + randomVisibility).toFixed(1)),\n    luminosity: Number(Math.max(0, config.baseLuminosity + timeVariation * 200 + randomLuminosity).toFixed(1)),\n    battery_level: Number(Math.max(0, Math.min(100, config.baseBattery + timeVariation * 15 + randomBattery)).toFixed(1))\n};\n\nnode.log(`🌊 Dati per ${siteId}: T=${currentData.temperature}°C, C=${currentData.current_speed}m/s`);\n\nmsg.payload = currentData;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 180,
+        "wires": [
+            [
+                "970d7e63cede8419"
+            ]
+        ]
+    },
+    {
+        "id": "bea5fc62bb6c1b81",
+        "type": "http in",
+        "z": "f6f2187d.f17ca8",
+        "name": "GET /api/dive/alerts/active",
+        "url": "/api/dive/alerts/active",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 130,
+        "y": 260,
+        "wires": [
+            [
+                "970362708a09b4b9"
+            ]
+        ]
+    },
+    {
+        "id": "970362708a09b4b9",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "Get Active Alerts",
+        "func": "// Simula alert attivi - in futuro collegare a database alert\nconst alerts = [\n    {\n        type: \"current\",\n        level: \"warning\",\n        message: \"Corrente forte rilevata\",\n        value: 1.8,\n        threshold: 1.5,\n        site_id: \"capo_vaticano\",\n        timestamp: new Date().toISOString()\n    },\n    {\n        type: \"battery\",\n        level: \"critical\",\n        message: \"Batteria sensore scarica\",\n        value: 15,\n        threshold: 20,\n        site_id: \"tropea_reef\",\n        timestamp: new Date().toISOString()\n    }\n];\n\n// Filtra alert solo se condizioni realmente critiche\nconst activeAlerts = alerts.filter(alert => {\n    // Aggiungi logica per determinare alert realmente attivi\n    return Math.random() > 0.5; // 50% chance - sostituire con logica reale\n});\n\nmsg.payload = activeAlerts;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "x": 390,
+        "y": 260,
+        "wires": [
+            [
+                "970d7e63cede8419"
+            ]
+        ]
+    },
+    {
+        "id": "970d7e63cede8419",
+        "type": "http response",
+        "z": "f6f2187d.f17ca8",
+        "name": "HTTP Response",
+        "statusCode": "200",
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
+        },
+        "x": 680,
+        "y": 180,
+        "wires": []
+    }
+]

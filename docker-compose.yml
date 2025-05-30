@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # Database InfluxDB per dati temporali
+  influxdb:
+    image: influxdb:2.7
+    container_name: dive_influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - ./config/influxdb:/etc/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=divesite123
+      - DOCKER_INFLUXDB_INIT_ORG=DivingCenter
+      - DOCKER_INFLUXDB_INIT_BUCKET=dive_data
+      - DOCKER_INFLUXDB_INIT_RETENTION=8760h
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=dive-monitoring-token-2024
+    restart: unless-stopped
+
+  # MQTT Broker per comunicazione IoT
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: dive_mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./config/mosquitto:/mosquitto/config
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_logs:/mosquitto/log
+    restart: unless-stopped
+
+  # Node-RED per elaborazione dati
+  nodered:
+    image: nodered/node-red:latest
+    container_name: dive_nodered
+    ports:
+      - "1880:1880"
+    volumes:
+      - nodered_data:/data
+    environment:
+      - TZ=Europe/Rome
+    depends_on:
+      - influxdb
+      - mosquitto
+    restart: unless-stopped
+
+  # Grafana per dashboard (opzionale)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dive_grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=divesite123
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+volumes:
+  influxdb_data:
+  mosquitto_data:
+  mosquitto_logs:
+  nodered_data:
+  grafana_data:
